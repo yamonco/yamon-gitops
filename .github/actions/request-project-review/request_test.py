@@ -99,7 +99,7 @@ class RemoteReviewContractTest(unittest.TestCase):
         clock = patch('time.monotonic', side_effect=lambda: elapsed_clock[0]) if elapsed is not None else contextlib.nullcontext()
         with patch.dict(os.environ, self.env, clear=True), patch('urllib.request.OpenerDirector.open', side_effect=open_request), patch('time.sleep', side_effect=self.sleeps.append), contextlib.redirect_stdout(log), contextlib.redirect_stderr(log), clock:
             try:
-                exec(compile(SCRIPT, str(WORKFLOW), 'exec'), {'__name__': '__main__'})
+                exec(compile(SCRIPT, str(WORKFLOW), 'exec'), {'__name__': '__main__', '__file__': str(ACTION.parent / 'request.py')})
             except SystemExit as error:
                 log.write(str(error))
                 success = False
@@ -499,7 +499,7 @@ class RemoteReviewContractTest(unittest.TestCase):
         self.assertEqual(sum(c.get_method() == 'POST' for c in self.calls), 1)
 
     def test_redirect_handler_refuses_credential_forwarding(self):
-        namespace = {'__name__': 'test'}
+        namespace = {'__name__': 'test', '__file__': str(ACTION.parent / 'request.py')}
         exec(compile(SCRIPT, str(WORKFLOW), 'exec'), namespace)
         handler = namespace['NoRedirect']()
         self.assertIsNone(handler.redirect_request(None, None, 302, '', {}, 'https://other.example'))
@@ -517,7 +517,7 @@ class RemoteReviewContractTest(unittest.TestCase):
 
 class AutomaticReviewDiscoveryTest(unittest.TestCase):
     def setUp(self):
-        namespace = {"__name__": "test"}
+        namespace = {"__name__": "test", "__file__": str(ACTION.parent / "request.py")}
         exec(compile(SCRIPT, str(ACTION.parent / "request.py"), "exec"), namespace)
         self.discover = namespace.get("current_pull_request")
         self.assertIsNotNone(self.discover, "Shared review caller must discover its current PR")
