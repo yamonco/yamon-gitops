@@ -1,0 +1,53 @@
+name: Submit image build request
+description: Submit once with existing source authority; consume the correlated result in subsequent steps of the same job.
+inputs:
+  profile:
+    description: Project-owned build profile
+    required: false
+    default: default
+  broker-url:
+    description: Company approved broker origin
+    required: true
+  source_channel:
+    description: Approved default or canary channel
+    required: false
+    default: default
+outputs:
+  executor_commit:
+    description: Broker-selected immutable company executor SHA
+    value: ${{ steps.dispatch.outputs.executor_commit }}
+  request_id:
+    description: Retained source request ID
+    value: ${{ steps.dispatch.outputs.request_id }}
+  release_run_url:
+    description: Correlated immutable executor run URL
+    value: ${{ steps.dispatch.outputs.release_run_url }}
+runs:
+  using: composite
+  steps:
+  - name: Submit build request
+    id: dispatch
+    shell: bash
+    run: python3 "${{ github.action_path }}/request.py"
+    env:
+      IMAGE_BUILD_BROKER_URL: ${{ inputs.broker-url }}
+      IMAGE_BUILD_OIDC_AUDIENCE: fractalops-project-validation
+      SOURCE_CHANNEL: ${{ inputs.source_channel }}
+      PROFILE: ${{ inputs.profile }}
+      REQUEST_ID: ${{ github.repository_id }}-${{ github.run_id }}-${{ github.run_attempt }}
+      SOURCE_REF: ${{ github.sha }}
+      SOURCE_REPOSITORY: ${{ github.repository }}
+  - name: Show build request
+    env:
+      IMAGE_BUILD_BROKER_URL: ${{ inputs.broker-url }}
+      IMAGE_BUILD_OIDC_AUDIENCE: fractalops-project-validation
+      SOURCE_CHANNEL: ${{ inputs.source_channel }}
+      PROFILE: ${{ inputs.profile }}
+      REQUEST_ID: ${{ github.repository_id }}-${{ github.run_id }}-${{ github.run_attempt }}
+      SOURCE_REF: ${{ github.sha }}
+      SOURCE_REPOSITORY: ${{ github.repository }}
+      RELEASE_RUN_URL: ${{ steps.dispatch.outputs.release_run_url }}
+    run: "{\n  echo \"### Remote project image requested\"\n  echo\n  echo \"- request: ${REQUEST_ID}\"\n  echo \"- source: ${SOURCE_REPOSITORY}@${SOURCE_REF}\"\
+      \n  echo \"- profile: ${PROFILE}\"\n  echo \"- execution: ${RELEASE_RUN_URL}\"\n  echo \"- result: reported to this commit as yamon/remote-image/${PROFILE}\"\
+      \n} >> \"$GITHUB_STEP_SUMMARY\"\n"
+    shell: bash

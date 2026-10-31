@@ -1,0 +1,54 @@
+name: Submit validation build request
+description: Submit once with existing source authority; consume the correlated result in subsequent steps of the same job.
+inputs:
+  profile:
+    description: Project-owned build profile
+    required: false
+    default: default
+  broker-url:
+    description: Company approved broker origin
+    required: true
+  source_pr:
+    description: Explicit open same-repository PR number
+    required: true
+outputs:
+  executor_commit:
+    description: Broker-selected immutable company executor SHA
+    value: ${{ steps.dispatch.outputs.executor_commit }}
+  request_id:
+    description: Retained source request ID
+    value: ${{ steps.dispatch.outputs.request_id }}
+  validation_run_url:
+    description: Correlated immutable executor run URL
+    value: ${{ steps.dispatch.outputs.validation_run_url }}
+runs:
+  using: composite
+  steps:
+  - name: Submit build request
+    id: dispatch
+    shell: bash
+    run: python3 "${{ github.action_path }}/request.py"
+    env:
+      IMAGE_BUILD_BROKER_URL: ${{ inputs.broker-url }}
+      IMAGE_BUILD_OIDC_AUDIENCE: fractalops-project-validation
+      SOURCE_PR: ${{ inputs.source_pr }}
+      PROFILE: ${{ inputs.profile }}
+      REQUEST_ID: ${{ github.repository_id }}-${{ github.run_id }}-${{ github.run_attempt }}
+      SOURCE_COMMIT: ${{ github.sha }}
+      SOURCE_REF: ${{ github.ref }}
+      SOURCE_REPOSITORY: ${{ github.repository }}
+  - name: Show validation request
+    env:
+      IMAGE_BUILD_BROKER_URL: ${{ inputs.broker-url }}
+      IMAGE_BUILD_OIDC_AUDIENCE: fractalops-project-validation
+      SOURCE_PR: ${{ inputs.source_pr }}
+      PROFILE: ${{ inputs.profile }}
+      REQUEST_ID: ${{ github.repository_id }}-${{ github.run_id }}-${{ github.run_attempt }}
+      SOURCE_COMMIT: ${{ github.sha }}
+      SOURCE_REF: ${{ github.ref }}
+      SOURCE_REPOSITORY: ${{ github.repository }}
+      VALIDATION_RUN_URL: ${{ steps.dispatch.outputs.validation_run_url }}
+    run: "{\n  echo \"### Remote project validation requested\"\n  echo\n  echo \"- request: ${REQUEST_ID}\"\n  echo \"- source: ${SOURCE_REPOSITORY}@${SOURCE_COMMIT}\"\
+      \n  echo \"- review PR: ${SOURCE_PR}\"\n  echo \"- profile: ${PROFILE}\"\n  echo \"- execution: ${VALIDATION_RUN_URL}\"\n  echo \"- result: asynchronous;\
+      \ inspect the retained validation run\"\n} >> \"$GITHUB_STEP_SUMMARY\"\n"
+    shell: bash
