@@ -28,7 +28,7 @@ def read_json(response):
 
 CONTEXT_FIELDS = {
     "SOURCE_REPOSITORY": r"[A-Za-z0-9-]{1,39}/[A-Za-z0-9_.-]{1,100}",
-    "SOURCE_REF": r"[0-9a-f]{40}",
+    "SOURCE_COMMIT": r"[0-9a-f]{40}",
     "PROFILE": r"[a-z0-9]([a-z0-9-]{0,46}[a-z0-9])?",
     "REQUEST_ID": r"[1-9][0-9]*-[1-9][0-9]*-[1-9][0-9]*",
     "GITHUB_REF": r"refs/heads/[A-Za-z0-9][A-Za-z0-9._/-]*",
@@ -111,7 +111,7 @@ def report_failure(reason, context):
 
 def main(context):
     repository = required("SOURCE_REPOSITORY", r"[A-Za-z0-9-]{1,39}/[A-Za-z0-9_.-]{1,100}")
-    commit = required("SOURCE_REF", r"[0-9a-f]{40}")
+    commit = required("SOURCE_COMMIT", r"[0-9a-f]{40}")
     profile = required("PROFILE", r"[a-z0-9]([a-z0-9-]{0,46}[a-z0-9])?")
     request_id = required("REQUEST_ID", r"[1-9][0-9]*-[1-9][0-9]*-[1-9][0-9]*") + "-" + profile
     ref = required("GITHUB_REF", r"refs/heads/[A-Za-z0-9][A-Za-z0-9._/-]*")

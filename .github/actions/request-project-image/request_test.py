@@ -41,7 +41,7 @@ class RemoteImageContractTest(unittest.TestCase):
             'IMAGE_BUILD_BROKER_URL': 'https://broker.example',
             'IMAGE_BUILD_OIDC_AUDIENCE': 'fractalops-project-validation',
             'SOURCE_CHANNEL': 'default', 'SOURCE_REPOSITORY': 'yamonco/example',
-            'SOURCE_REF': 'a' * 40, 'PROFILE': 'default', 'REQUEST_ID': '123-456-1',
+            'SOURCE_COMMIT': 'a' * 40, 'PROFILE': 'default', 'REQUEST_ID': '123-456-1',
             'GITHUB_REF': 'refs/heads/main', 'GITHUB_EVENT_NAME': 'push',
             'GITHUB_EVENT_PATH': str(self.event), 'GITHUB_OUTPUT': str(self.output),
             'GITHUB_STEP_SUMMARY': str(self.summary),
@@ -181,7 +181,7 @@ class RemoteImageContractTest(unittest.TestCase):
 
     def test_bad_source_policy_fails_before_network(self):
         for name, value in [
-            ('SOURCE_CHANNEL', 'review'), ('SOURCE_REF', 'main'), ('SOURCE_REPOSITORY', 'owner/repo/extra'),
+            ('SOURCE_CHANNEL', 'review'), ('SOURCE_COMMIT', 'main'), ('SOURCE_REPOSITORY', 'owner/repo/extra'),
             ('PROFILE', 'bad profile'), ('REQUEST_ID', '123-456-0'), ('GITHUB_EVENT_NAME', 'pull_request'),
             ('GITHUB_EVENT_NAME', 'pull_request_target'), ('GITHUB_REF', 'refs/heads/other'),
             ('GITHUB_REF', 'refs/tags/main'), ('GITHUB_REF', 'refs/heads/deploy/../main'),
