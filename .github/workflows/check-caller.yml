@@ -16,6 +16,8 @@ jobs:
       - run: python3 -B .github/actions/request-project-image/request_test.py
       - run: python3 -B .github/actions/request-project-review/request_test.py
       - run: python3 -B check_contract.py
-      - uses: ./.github/actions/setup-cosign
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: v3.1.4
       - name: Verify installed signature CLI
         run: cosign version | grep -F 'v3.1.4'
