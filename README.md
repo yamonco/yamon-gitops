@@ -22,6 +22,4 @@ Failure annotations and Job Summary show cause, next action, responsible owner a
 
 Support: https://langboard.yamon.io/board/6v0q6uY44jn/hmD5UBzCv6O
 
-## Signature tooling
-
-`.github/actions/setup-cosign` installs the company-supported cosign release through the official Sigstore installer, with both installer and CLI versions pinned. BuildPlane signature producers and consumers use this same action so a frozen workflow cannot silently select a newer incompatible CLI. It has no caller-supplied version or credentials. The contract CI executes the action and checks the installed version; product image and signature verification remain separate gates.
+The contract CI uses the official Sigstore installer directly with cosign v3.1.4. No company installation wrapper or additional developer setup is required.
