@@ -1,0 +1,49 @@
+name: Submit validation build request Validation
+
+on:
+  workflow_call:
+    inputs:
+      profile:
+        description: Profile key from the project-owned .fractalops/image-build.json
+        required: false
+        default: default
+        type: string
+      source_pr:
+        description: Explicit positive number of the open same-repository review PR
+        required: true
+        type: string
+    outputs:
+      executor_commit:
+        description: Broker-selected immutable company executor SHA
+        value: ${{ jobs.request-validation.outputs.executor_commit }}
+      request_id:
+        description: Cross-repository validation correlation
+        value: ${{ jobs.request-validation.outputs.request_id }}
+      validation_run_url:
+        description: Remote review validation execution URL
+        value: ${{ jobs.request-validation.outputs.validation_run_url }}
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  request-validation:
+    name: Validate build
+    runs-on: ${{ vars.BUILD_REQUEST_RUNNER || 'fractalops-ci-native' }}
+    defaults:
+      run:
+        shell: bash
+    timeout-minutes: 5
+    outputs:
+      executor_commit: ${{ steps.dispatch.outputs.executor_commit }}
+      request_id: ${{ steps.dispatch.outputs.request_id }}
+      validation_run_url: ${{ steps.dispatch.outputs.validation_run_url }}
+    steps:
+      - name: Submit build request
+        id: dispatch
+        uses: yamonco/yamon-gitops/.github/actions/request-project-review@e9ad2f2f66db35e083d4eeb0e2a2a8b37d2c27d3
+        with:
+          profile: ${{ inputs.profile }}
+          broker-url: ${{ vars.IMAGE_BUILD_BROKER_URL }}
+          source_pr: ${{ inputs.source_pr }}

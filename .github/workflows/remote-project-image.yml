@@ -1,0 +1,50 @@
+name: Submit image build request
+
+on:
+  workflow_call:
+    inputs:
+      profile:
+        description: Profile key from the project-owned .fractalops/image-build.json
+        required: false
+        default: default
+        type: string
+      source_channel:
+        description: Default history or explicitly approved protected canary source
+        required: false
+        default: default
+        type: string
+    outputs:
+      executor_commit:
+        description: Broker-selected immutable company executor SHA
+        value: ${{ jobs.request-release.outputs.executor_commit }}
+      request_id:
+        description: Cross-repository build correlation
+        value: ${{ jobs.request-release.outputs.request_id }}
+      release_run_url:
+        description: Remote build execution URL
+        value: ${{ jobs.request-release.outputs.release_run_url }}
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  request-release:
+    name: Submit build request
+    runs-on: ${{ vars.BUILD_REQUEST_RUNNER || 'fractalops-ci-native' }}
+    defaults:
+      run:
+        shell: bash
+    timeout-minutes: 5
+    outputs:
+      executor_commit: ${{ steps.dispatch.outputs.executor_commit }}
+      request_id: ${{ steps.dispatch.outputs.request_id }}
+      release_run_url: ${{ steps.dispatch.outputs.release_run_url }}
+    steps:
+      - name: Submit build request
+        id: dispatch
+        uses: yamonco/yamon-gitops/.github/actions/request-project-image@e9ad2f2f66db35e083d4eeb0e2a2a8b37d2c27d3
+        with:
+          profile: ${{ inputs.profile }}
+          broker-url: ${{ vars.IMAGE_BUILD_BROKER_URL }}
+          source_channel: ${{ inputs.source_channel }}
