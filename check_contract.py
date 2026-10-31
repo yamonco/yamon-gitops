@@ -9,11 +9,14 @@ RUNNER = "runs-on: ${{ vars.BUILD_REQUEST_RUNNER || 'fractalops-ci-native' }}"
 for kind in ("image", "review"):
     wrapper = (ROOT / f".github/workflows/remote-project-{kind}.yml").read_text()
 
+    starter = (ROOT / f"workflow-templates/remote-project-{kind}.yml").read_text()
+    assert "cancel-in-progress: false" in starter, kind
+    assert f"uses: yamonco/yamon-gitops/.github/workflows/remote-project-{kind}.yml@" in starter, kind
     assert wrapper.count(RUNNER) == 1, kind
     assert f"uses: yamonco/yamon-gitops/.github/actions/request-project-{kind}@" in wrapper, kind
     assert "broker-url: ${{ vars.IMAGE_BUILD_BROKER_URL }}" in wrapper, kind
     assert "timeout-minutes: 5" in wrapper, kind
-    for source in (wrapper,):
+    for source in (wrapper, starter):
         assert "contents: read" in source and "id-token: write" in source, kind
         refs = re.findall(r"(?m)^\s*uses:\s*(\S+)", source)
         assert len(refs) == 1 and IMMUTABLE_REF.search(refs[0]) and not refs[0].endswith("@" + "0" * 40), kind

@@ -1,0 +1,31 @@
+name: Validate build
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_pr:
+        description: Open same-repository PR number for this review branch
+        required: true
+        type: string
+      profile:
+        description: Centrally approved validation profile
+        required: false
+        default: default
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: project-review-${{ github.ref }}-${{ inputs.profile || 'default' }}
+  cancel-in-progress: false
+
+jobs:
+  request-validation:
+    if: startsWith(github.ref, 'refs/heads/')
+    name: Validate build
+    uses: yamonco/yamon-gitops/.github/workflows/remote-project-review.yml@e6a6d69c9c87e915abe588ff7a3fa620546b59b7
+    with:
+      profile: ${{ inputs.profile || 'default' }}
+      source_pr: ${{ inputs.source_pr }}
