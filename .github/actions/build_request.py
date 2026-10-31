@@ -28,12 +28,32 @@ def read_json(response):
 def report_failure(reason, context, *, context_fields, request_suffix):
     """Render only fixed guidance and allowlisted context, never remote error text."""
     code = context.get("http")
-    if (code in (401, 403) or "Actions identity unavailable" in reason
+    code = code if type(code) is int and 100 <= code <= 599 else None
+    phase = context.get("phase")
+    phase = phase if phase in ("configuration", "identity", "resolution", "admission", "receipt", "output") else "configuration"
+    redirected = code in (301, 302, 303, 307, 308)
+    if redirected:
+        cause = "Incorrect browser-SSO routing: the machine API returned a redirect."
+        owner = "Central BuildPlane owner: restore the API route for Actions OIDC without browser sign-in."
+        action = "Inspect the linked source run and shared guide for API route recovery; keep NoRedirect and Actions OIDC, without adding credentials or runners."
+    elif code in (400, 422):
+        cause = "Invalid request or configuration rejected by the service."
+        owner = "Product owner: verify source/profile/channel/PR inputs; central BuildPlane owner: verify the shared request contract."
+        action = "Inspect the linked source run's request inputs against the shared guide and correct the invalid configuration."
+    elif code == 429:
+        cause = "Request throttled by the service."
+        owner = "Central BuildPlane owner: inspect service throttling under the existing request policy."
+        action = "Inspect the linked source run and shared guide; wait for service throttling to clear."
+    elif code in (502, 503, 504):
+        cause = "Request service unavailable."
+        owner = "Central BuildPlane owner: verify the shared endpoint and service availability for the reported phase."
+        action = "Inspect the linked source run and shared guide for service recovery."
+    elif (code in (401, 403) or "Actions identity unavailable" in reason
         or "Actions identity credential unavailable" in reason):
         cause = "Authentication or authorization failed."
         owner = "Central BuildPlane owner: restore Actions OIDC trust and broker access."
         action = "No developer configuration change required. Central BuildPlane must restore authentication; do not add product credentials."
-    elif code in (404, 405) and context.get("phase") == "resolution":
+    elif code in (404, 405) and phase == "resolution":
         cause = "The deployed BuildPlane API does not provide the required executor resolution endpoint."
         owner = "Central BuildPlane owner: deploy the compatible API before activating this shared caller."
         action = "No build requested. Wait for the central API rollout; do not change project configuration or retry this request."
@@ -41,7 +61,7 @@ def report_failure(reason, context, *, context_fields, request_suffix):
         cause = "Approval or build profile policy rejected the request."
         owner = "Central BuildPlane owner: verify approval and allowed profiles; product owner: verify the selected profile."
         action = "Keep the selected profile unless the product configuration is wrong. Central BuildPlane must repair approval bindings; do not create credentials or a separate runner."
-    elif code == 412 and context.get("phase") != "receipt":
+    elif code == 412 and phase != "receipt":
         cause = "Executor precondition changed; no build was admitted by this request."
         owner = "Central BuildPlane owner: reconcile the frozen executor with the approved executor."
         action = "No developer configuration change required. Central BuildPlane must reconcile executor authority; do not change pins or bypass If-Match."
@@ -50,20 +70,25 @@ def report_failure(reason, context, *, context_fields, request_suffix):
         cause = "Receipt or executor authority failed security validation."
         owner = "Central BuildPlane owner: reconcile the retained request and trusted executor identity."
         action = "No developer configuration change required. Central BuildPlane must reconcile this request; do not trust returned run links or submit again."
-    elif context.get("phase") not in ("configuration", "output"):
+    elif phase not in ("configuration", "output"):
         cause = "BuildPlane transport unavailable or run identity still pending; outcome is unconfirmed."
         owner = "Central BuildPlane owner: recover service and reconcile this retained request."
         action = ("Keep this request; do not rerun or submit another build while its outcome is unknown."
                   if context.get("submitted") else "No build requested. Central BuildPlane must restore service; no developer infrastructure change required.")
     else:
         cause = ("Caller output configuration failed after a confirmed build dispatch."
-                 if context.get("phase") == "output" else "Caller configuration is invalid or incomplete; no build requested.")
+                 if phase == "output" else "Caller configuration is invalid or incomplete; no build requested.")
         owner = "Product owner: correct source/profile/channel/PR inputs; central BuildPlane owner: correct shared action or endpoint configuration."
         action = ("Central BuildPlane must correct the shared action output configuration; retain the confirmed build and do not submit again."
-                  if context.get("phase") == "output" else "Correct the invalid workflow input identified in the error above, then rerun. Source/profile/channel/PR are product inputs; shared endpoint and OIDC configuration belong to central BuildPlane.")
+                  if phase == "output" else "Correct the invalid workflow input identified in the error above, then rerun. Source/profile/channel/PR are product inputs; shared endpoint and OIDC configuration belong to central BuildPlane.")
 
-    if context.get("phase") == "receipt":
-        action += " Preserve the retained request; no new submission until central reconciliation confirms its outcome."
+    if redirected or code in (400, 422, 429, 502, 503, 504):
+        if context.get("submitted"):
+            action += " Submission outcome is unconfirmed. Keep this request; do not rerun or submit another build. Status polling reads the same retained request and does not submit a build."
+        else:
+            action = "No build requested. " + action + " After the reported problem is corrected, rerun the source workflow to request a build."
+    if phase == "receipt":
+        action += " Preserve the retained request; no new submission until reconciliation confirms its outcome."
 
     fields = {}
     for name, pattern in context_fields.items():
@@ -78,17 +103,21 @@ def report_failure(reason, context, *, context_fields, request_suffix):
     run = fields["REQUEST_ID"].split("-")
     source_run = (f"https://github.com/{repository}/actions/runs/{run[1]}/attempts/{run[2]}"
                   if repository != "unavailable" and len(run) == 3 else "unavailable")
+    admission_http = context.get("admission_http")
+    admission_http = admission_http if type(admission_http) is int and 100 <= admission_http <= 599 else "unavailable"
+    executor = context.get("executor")
+    executor = executor if isinstance(executor, str) and re.fullmatch(r"[0-9a-f]{40}", executor) else "unavailable"
     details = [f"Cause: {cause}", f"Next action: {action}", f"Responsibility: {owner}",
                "Context attached automatically below. No infrastructure evidence form or manual coordinator request is required.",
                "Shared guide: https://langboard.yamon.io/board/6v0q6uY44jn/hmD5UBzCv6O",
                f"Request: {request_id}", f"Source run: {source_run}",
-               f"Phase: {context.get('phase', 'configuration')}",
+               f"Phase: {phase}",
                f"HTTP status: {code if type(code) is int else 'unavailable'}",
-               f"Admission HTTP status: {context.get('admission_http', 'unavailable')}",
-               f"Frozen executor: {context.get('executor', 'unavailable')}"]
+               f"Admission HTTP status: {admission_http}",
+               f"Frozen executor: {executor}"]
     details.extend(f"{name}: {value}" for name, value in fields.items() if name != "REQUEST_ID")
     # Escape workflow command data even though context is restricted to safe characters.
-    annotation = " | ".join(details[:2] + ["Full context: Job Summary.", details[4]]).replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+    annotation = " | ".join(details[:2] + details[4:] + ["Full context: Job Summary."]).replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
     print("::error title=Company BuildPlane request failed::" + annotation)
     try:
         with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary:

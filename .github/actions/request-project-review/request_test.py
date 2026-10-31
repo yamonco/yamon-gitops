@@ -52,6 +52,9 @@ class RemoteReviewContractTest(unittest.TestCase):
         self.sleeps = []
 
     def run_workflow(self, *responses, elapsed=None, resolution=None, resolution_headers=None, refresh_error=None, discovery=None):
+        for response in (*responses, resolution):
+            if isinstance(response, urllib.error.HTTPError):
+                self.addCleanup(response.close)
         self.calls = []
         self.transport_calls = []
         self.output.unlink(missing_ok=True)
@@ -407,6 +410,100 @@ class RemoteReviewContractTest(unittest.TestCase):
                 self.assertIn('No infrastructure evidence form or manual coordinator request is required', self.summary_text)
                 self.assertEqual(sum(c.get_method() == 'POST' for c in self.calls), 1)
                 self.assertEqual(self.sleeps, [])
+
+    def test_resolution_http_failure_is_actionable_in_console_without_dispatch(self):
+        for code, cause in ((301, 'browser-SSO routing'), (302, 'browser-SSO routing'),
+                            (303, 'browser-SSO routing'), (307, 'browser-SSO routing'),
+                            (308, 'browser-SSO routing'), (400, 'request or configuration'),
+                            (422, 'request or configuration'), (429, 'throttled'),
+                            (502, 'service unavailable'), (503, 'service unavailable'),
+                            (504, 'service unavailable')):
+            with self.subTest(code=code):
+                error = urllib.error.HTTPError(
+                    'https://broker.example/resolve?private-token', code,
+                    'secret-error-body', {'Location': 'https://auth.yamon.io/.pomerium/sign_in?private-token'},
+                    io.BytesIO(b'identity-secret ::warning::injected'),
+                )
+                self.assertFalse(self.run_workflow(resolution=error))
+                annotation = next(line for line in self.log.splitlines() if line.startswith('::error '))
+                self.assertIn(cause, annotation)
+                self.assertIn(f'HTTP status: {code}', annotation)
+                self.assertIn('Phase: resolution', annotation)
+                self.assertIn('Request: ' + RECEIPT['requestId'], annotation)
+                self.assertIn('https://github.com/yamonco/example/actions/runs/456/attempts/1', annotation)
+                self.assertIn('No build requested', annotation)
+                self.assertNotIn('Approval', annotation)
+                self.assertNotIn('private-token', self.log + self.summary_text)
+                self.assertNotIn('auth.yamon.io', self.log + self.summary_text)
+                self.assertNotIn('::warning::injected', self.log + self.summary_text)
+                self.assertEqual(sum(c.get_method() == 'POST' for c in self.calls), 0)
+                self.assertEqual(self.sleeps, [])
+
+    def test_post_and_receipt_http_failures_keep_unknown_outcome_and_request_identity(self):
+        for code, cause in ((302, 'browser-SSO routing'), (400, 'request or configuration'),
+                            (422, 'request or configuration')):
+            with self.subTest(code=code):
+                self.assertFalse(self.run_workflow({'value': 'assertion-secret'}, http_error(code)))
+                annotation = next(line for line in self.log.splitlines() if line.startswith('::error '))
+                self.assertIn(cause, annotation)
+                self.assertIn(f'HTTP status: {code}', annotation)
+                self.assertIn('Phase: admission', annotation)
+                self.assertIn('Submission outcome is unconfirmed', annotation)
+                self.assertIn('do not rerun or submit another build', annotation)
+                self.assertNotIn('No build requested', annotation)
+                self.assertNotIn('Approval', annotation)
+                self.assertEqual(sum(c.get_method() == 'POST' for c in self.calls), 1)
+                self.assertEqual(self.sleeps, [])
+        for code, cause in ((302, 'browser-SSO routing'), (400, 'request or configuration'),
+                            (429, 'throttled'), (502, 'service unavailable'),
+                            (503, 'service unavailable'), (504, 'service unavailable')):
+            with self.subTest(receipt_code=code):
+                self.assertFalse(self.run_workflow({'value': 'assertion-secret'}, TimeoutError(),
+                                                  *[http_error(code) for _ in range(6)]))
+                annotation = next(line for line in self.log.splitlines() if line.startswith('::error '))
+                self.assertIn(cause, annotation)
+                self.assertIn('Phase: receipt', annotation)
+                self.assertIn(f'HTTP status: {code}', annotation)
+                self.assertIn('Status polling reads the same retained request', annotation)
+                self.assertIn('Preserve the retained request', annotation)
+                self.assertNotIn('No build requested', annotation)
+                self.assertEqual(sum(c.get_method() == 'POST' for c in self.calls), 1)
+                self.assertTrue(all(c.data is None for c in self.calls
+                                    if c.full_url.endswith('/' + RECEIPT['requestId'])))
+
+    def test_native_no_redirect_302_exposes_routing_failure_without_following_sso(self):
+        from email.message import Message
+        from urllib.response import addinfourl
+
+        namespace = {'__name__': 'test', '__file__': str(ACTION.parent / 'request.py')}
+        exec(compile(SCRIPT, str(WORKFLOW), 'exec'), namespace)
+        headers = Message()
+        headers['Location'] = 'https://auth.yamon.io/.pomerium/sign_in?identity-secret'
+        response = addinfourl(io.BytesIO(b'assertion-secret'), headers,
+                              'https://broker.example/v1/builds/project-validations/resolve', 302)
+        response.msg = 'Found'
+        opener = urllib.request.build_opener(namespace['NoRedirect']())
+        request = urllib.request.Request(response.url, data=b'{}', headers={
+            'Authorization': 'Bearer assertion-secret', 'User-Agent': 'Company-RemoteValidation/1.0',
+        })
+        log = io.StringIO()
+        with patch('urllib.request.HTTPSHandler.https_open', return_value=response) as transport:
+            with self.assertRaises(urllib.error.HTTPError) as failure:
+                opener.open(request, timeout=30)
+            self.assertEqual(failure.exception.code, 302)
+            with patch.dict(os.environ, self.env, clear=True), contextlib.redirect_stdout(log):
+                namespace['report_failure'](
+                    'Executor resolution unavailable or invalid; no build requested',
+                    {'phase': 'resolution', 'http': failure.exception.code},
+                    context_fields=namespace['CONTEXT_FIELDS'], request_suffix=namespace['REQUEST_SUFFIX'],
+                )
+            failure.exception.close()
+        self.assertEqual(transport.call_count, 1)
+        self.assertIn('browser-SSO routing', log.getvalue())
+        self.assertIn('HTTP status: 302', log.getvalue())
+        self.assertIn('Phase: resolution', log.getvalue())
+        self.assertNotIn('auth.yamon.io', log.getvalue())
+        self.assertNotIn('secret', log.getvalue())
 
     def test_missing_resolution_api_is_central_deployment_failure(self):
         for code in (404, 405):
