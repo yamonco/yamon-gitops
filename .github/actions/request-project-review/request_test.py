@@ -51,7 +51,7 @@ class RemoteReviewContractTest(unittest.TestCase):
         self.calls = []
         self.sleeps = []
 
-    def run_workflow(self, *responses, elapsed=None, resolution=None, resolution_headers=None, refresh_error=None):
+    def run_workflow(self, *responses, elapsed=None, resolution=None, resolution_headers=None, refresh_error=None, discovery=None):
         self.calls = []
         self.transport_calls = []
         self.output.unlink(missing_ok=True)
@@ -63,6 +63,10 @@ class RemoteReviewContractTest(unittest.TestCase):
         durations = iter(elapsed or ())
         def open_request(request, timeout):
             self.transport_calls.append(request)
+            if request.full_url.startswith('https://api.github.com/repos/'):
+                response = io.BytesIO(json.dumps(discovery if discovery is not None else []).encode())
+                response.headers = {}
+                return response
             # Keep existing admission/reconciliation assertions separate from resolution.
             if request.full_url.endswith('/resolve'):
                 reply = resolution if resolution is not None else {
@@ -117,6 +121,22 @@ class RemoteReviewContractTest(unittest.TestCase):
         return success
 
 
+    def test_automatic_push_discovers_before_identity_and_admission(self):
+        self.env.update(SOURCE_PR='', GITHUB_EVENT_NAME='push', GITHUB_TOKEN='read-only-test-token')
+        pull = {'number': 12, 'state': 'open', 'head': {'repo': {'full_name': 'yamonco/example'},
+                'ref': 'review/example', 'sha': 'a' * 40}, 'base': {'repo': {'full_name': 'yamonco/example'}}}
+        self.assertTrue(self.run_workflow(discovery=[pull]))
+        self.assertTrue(self.transport_calls[0].full_url.startswith('https://api.github.com/repos/'))
+        self.assertEqual(json.loads(self.calls[1].data)['sourcePr'], 12)
+        self.assertIn('source_pr=12', self.output.read_text())
+        for request in self.transport_calls[1:]:
+            self.assertNotEqual(request.get_header('Authorization'), 'Bearer read-only-test-token')
+        self.assertNotIn('read-only-test-token', self.log + self.summary_text)
+        self.assertFalse(self.run_workflow(discovery=[]))
+        self.assertEqual(self.calls, [])
+        self.assertEqual(len(self.transport_calls), 1)
+        self.assertNotIn('read-only-test-token', self.log + self.summary_text)
+
     def test_review_success_exact_payload_and_source_identity(self):
         self.assertTrue(self.run_workflow())
         self.assertEqual([c.get_method() for c in self.calls], ['GET', 'POST'])
@@ -128,7 +148,7 @@ class RemoteReviewContractTest(unittest.TestCase):
         self.assertEqual(self.calls[1].full_url, 'https://broker.example/v1/builds/project-validations')
         query = urllib.parse.parse_qs(urllib.parse.urlsplit(self.calls[0].full_url).query)
         self.assertEqual(query, {'x': ['1'], 'audience': ['fractalops-project-validation']})
-        self.assertEqual(self.output.read_text(), 'executor_commit=' + 'b' * 40 + '\nrequest_id=123-456-1\nvalidation_run_url=' + RECEIPT['workflowRunUrl'] + '\n')
+        self.assertEqual(self.output.read_text(), 'executor_commit=' + 'b' * 40 + '\nrequest_id=123-456-1\nvalidation_run_url=' + RECEIPT['workflowRunUrl'] + '\nsource_pr=12\n')
         source = ACTION.read_text()
         for field in ('SOURCE_COMMIT: ${{ github.sha }}', 'SOURCE_REF: ${{ github.ref }}',
                       'SOURCE_REPOSITORY: ${{ github.repository }}',
@@ -493,6 +513,57 @@ class RemoteReviewContractTest(unittest.TestCase):
         for forbidden in ('YAMON_REMOTE_BUILD_TOKEN', 'GITOPS_MACHINE_TOKEN', 'GH_TOKEN', 'actions/checkout', '/dispatches', 'Langboard', 'PRODUCT_RUNNER'):
             self.assertNotIn(forbidden, source)
 
+
+
+class AutomaticReviewDiscoveryTest(unittest.TestCase):
+    def setUp(self):
+        namespace = {"__name__": "test"}
+        exec(compile(SCRIPT, str(ACTION.parent / "request.py"), "exec"), namespace)
+        self.discover = namespace.get("current_pull_request")
+        self.assertIsNotNone(self.discover, "Shared review caller must discover its current PR")
+        self.pull = {"number": 12, "state": "open", "head": {
+            "repo": {"full_name": "Langboard/langboard"}, "ref": "review/canary-test", "sha": "a" * 40},
+            "base": {"repo": {"full_name": "Langboard/langboard"}}}
+        self.calls = []
+
+    def discover_with(self, payload, headers=None):
+        class Opener:
+            def open(inner, request, timeout):
+                self.calls.append(request)
+                response = io.BytesIO(payload if isinstance(payload, bytes) else json.dumps(payload).encode())
+                response.headers = headers or {}
+                return response
+        with patch.dict(os.environ, {"GITHUB_TOKEN": "read-only-test-token"}, clear=True):
+            return self.discover(Opener(), "Langboard/langboard", "refs/heads/review/canary-test", "a" * 40)
+
+    def test_exact_same_repository_branch_and_commit(self):
+        self.assertEqual(self.discover_with([self.pull]), 12)
+        request = self.calls[0]
+        self.assertEqual(request.get_method(), "GET")
+        url = urllib.parse.urlsplit(request.full_url)
+        self.assertEqual(url.scheme + "://" + url.netloc + url.path,
+                         "https://api.github.com/repos/Langboard/langboard/pulls")
+        self.assertEqual(urllib.parse.parse_qs(url.query)["head"], ["Langboard:review/canary-test"])
+
+    def test_missing_ambiguous_stale_fork_closed_and_incomplete_fail_closed(self):
+        for field, value in (("sha", "b" * 40), ("ref", "other"), ("repo", {"full_name": "fork/langboard"})):
+            pull = json.loads(json.dumps(self.pull)); pull["head"][field] = value
+            with self.subTest(field=field), self.assertRaises(SystemExit):
+                self.discover_with([pull])
+        for pulls in ([], [self.pull, self.pull], {}, b"not json", b"x" * 1048577):
+            with self.subTest(pulls_type=type(pulls).__name__), self.assertRaises(SystemExit):
+                self.discover_with(pulls)
+        for field, value in (("number", True), ("number", 0), ("state", "closed"),
+                             ("base", {"repo": {"full_name": "other/repo"}})):
+            pull = json.loads(json.dumps(self.pull)); pull[field] = value
+            with self.subTest(field=field), self.assertRaises(SystemExit):
+                self.discover_with([pull])
+        with self.assertRaises(SystemExit):
+            self.discover_with([self.pull], {"Link": '<next>; rel="next"'})
+
+    def test_missing_credential_does_not_make_a_request(self):
+        with patch.dict(os.environ, {}, clear=True), self.assertRaises(SystemExit):
+            self.discover(None, "Langboard/langboard", "refs/heads/review/canary-test", "a" * 40)
 
 if __name__ == '__main__':
     unittest.main()

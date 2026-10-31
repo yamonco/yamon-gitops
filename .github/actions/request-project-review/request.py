@@ -19,6 +19,36 @@ def required(name, pattern):
     return value
 
 
+def current_pull_request(opener, repository, source_ref, revision):
+    """Discover one exact open same-repository PR; central admission retains authority."""
+    token = os.environ.get("GITHUB_TOKEN", "")
+    if not token:
+        raise SystemExit("Current pull request credential unavailable; no build requested")
+    branch = source_ref.removeprefix("refs/heads/")
+    query = urllib.parse.urlencode({"state": "open", "head": repository.split("/")[0] + ":" + branch, "per_page": 100})
+    request = urllib.request.Request(
+        "https://api.github.com/repos/" + repository + "/pulls?" + query,
+        headers={"Authorization": "Bearer " + token, "Accept": "application/vnd.github+json",
+                 "X-GitHub-Api-Version": "2022-11-28", "User-Agent": "Company-RemoteValidation/1.0"},
+    )
+    try:
+        with opener.open(request, timeout=30) as response:
+            raw = response.read(1048577)
+            if len(raw) > 1048576 or response.headers.get("Link"):
+                raise ValueError("Incomplete pull request response")
+            pulls = json.loads(raw)
+        if not isinstance(pulls, list) or len(pulls) != 1:
+            raise ValueError("Expected one open pull request")
+        pull = pulls[0]
+        if (pull["state"] != "open" or type(pull["number"]) is not int or pull["number"] <= 0
+            or pull["head"]["repo"]["full_name"] != repository or pull["base"]["repo"]["full_name"] != repository
+            or pull["head"]["ref"] != branch or pull["head"]["sha"] != revision):
+            raise ValueError("Pull request authority mismatch")
+        return pull["number"]
+    except (urllib.error.URLError, TimeoutError, OSError, ValueError, KeyError, TypeError, AttributeError):
+        raise SystemExit("Current unique same-repository pull request unavailable; no build requested") from None
+
+
 def read_json(response):
     raw = response.read(16385)
     if len(raw) > 16384:
@@ -82,6 +112,8 @@ def report_failure(reason, context):
     for name, pattern in CONTEXT_FIELDS.items():
         value = os.environ.get(name, "")
         fields[name] = value if re.fullmatch(pattern, value) else "unavailable"
+    if type(context.get("source_pr")) is int:
+        fields["SOURCE_PR"] = str(context["source_pr"])
     request_id = fields["REQUEST_ID"]
     if request_id != "unavailable":
         request_id += REQUEST_SUFFIX + fields["PROFILE"] if REQUEST_SUFFIX and fields["PROFILE"] != "unavailable" else ""
@@ -115,7 +147,6 @@ def main(context):
     profile = required("PROFILE", r"[a-z0-9]([a-z0-9-]{0,46}[a-z0-9])?")
     request_id = required("REQUEST_ID", r"[1-9][0-9]*-[1-9][0-9]*-[1-9][0-9]*")
     ref = required("SOURCE_REF", r"refs/heads/[A-Za-z0-9][A-Za-z0-9._/-]*")
-    source_pr = int(required("SOURCE_PR", r"[1-9][0-9]*"))
     required("GITHUB_EVENT_NAME", r"push|workflow_dispatch")
     if ".." in ref or "//" in ref or ref.endswith(("/", ".", ".lock")) or "@{" in ref:
         raise SystemExit("Invalid source ref")
@@ -132,6 +163,9 @@ def main(context):
     if not token:
         raise SystemExit("Actions identity credential unavailable")
     opener = urllib.request.build_opener(NoRedirect())
+    source_pr = (int(required("SOURCE_PR", r"[1-9][0-9]*")) if os.environ.get("SOURCE_PR")
+                 else current_pull_request(opener, repository, ref, commit))
+    context["source_pr"] = source_pr
     query = [(k, v) for k, v in urllib.parse.parse_qsl(oidc.query, keep_blank_values=True) if k != "audience"]
     query.append(("audience", audience))
     assertion_url = urllib.parse.urlunsplit(oidc._replace(query=urllib.parse.urlencode(query)))
@@ -282,7 +316,7 @@ def main(context):
         raise SystemExit(f"Validation run identity pending or outcome unknown; inspect retained request {request_id} before any new request")
     context["phase"] = "output"
     with open(os.environ["GITHUB_OUTPUT"], "a") as output:
-        output.write(f"executor_commit={executor_commit}\nrequest_id={request_id}\nvalidation_run_url={receipt['workflowRunUrl']}\n")
+        output.write(f"executor_commit={executor_commit}\nrequest_id={request_id}\nvalidation_run_url={receipt['workflowRunUrl']}\nsource_pr={source_pr}\n")
 
 
 if __name__ == "__main__":

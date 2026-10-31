@@ -1,4 +1,4 @@
-name: Submit validation build request
+name: Request checks
 description: Submit once with existing source authority; consume the correlated result in subsequent steps of the same job.
 inputs:
   profile:
@@ -9,8 +9,9 @@ inputs:
     description: Company approved broker origin
     required: true
   source_pr:
-    description: Explicit open same-repository PR number
-    required: true
+    description: Optional open same-repository PR number; omitted values discover the exact current branch and commit
+    required: false
+    default: ""
 outputs:
   executor_commit:
     description: Broker-selected immutable company executor SHA
@@ -24,7 +25,7 @@ outputs:
 runs:
   using: composite
   steps:
-  - name: Submit build request
+  - name: Submit checks request
     id: dispatch
     shell: bash
     run: python3 "${{ github.action_path }}/request.py"
@@ -32,23 +33,15 @@ runs:
       IMAGE_BUILD_BROKER_URL: ${{ inputs.broker-url }}
       IMAGE_BUILD_OIDC_AUDIENCE: fractalops-project-validation
       SOURCE_PR: ${{ inputs.source_pr }}
+      GITHUB_TOKEN: ${{ github.token }}
       PROFILE: ${{ inputs.profile }}
       REQUEST_ID: ${{ github.repository_id }}-${{ github.run_id }}-${{ github.run_attempt }}
       SOURCE_COMMIT: ${{ github.sha }}
       SOURCE_REF: ${{ github.ref }}
       SOURCE_REPOSITORY: ${{ github.repository }}
-  - name: Show validation request
-    env:
-      IMAGE_BUILD_BROKER_URL: ${{ inputs.broker-url }}
-      IMAGE_BUILD_OIDC_AUDIENCE: fractalops-project-validation
-      SOURCE_PR: ${{ inputs.source_pr }}
-      PROFILE: ${{ inputs.profile }}
-      REQUEST_ID: ${{ github.repository_id }}-${{ github.run_id }}-${{ github.run_attempt }}
-      SOURCE_COMMIT: ${{ github.sha }}
-      SOURCE_REF: ${{ github.ref }}
-      SOURCE_REPOSITORY: ${{ github.repository }}
-      VALIDATION_RUN_URL: ${{ steps.dispatch.outputs.validation_run_url }}
-    run: "{\n  echo \"### Remote project validation requested\"\n  echo\n  echo \"- request: ${REQUEST_ID}\"\n  echo \"- source: ${SOURCE_REPOSITORY}@${SOURCE_COMMIT}\"\
-      \n  echo \"- review PR: ${SOURCE_PR}\"\n  echo \"- profile: ${PROFILE}\"\n  echo \"- execution: ${VALIDATION_RUN_URL}\"\n  echo \"- result: asynchronous;\
-      \ inspect the retained validation run\"\n} >> \"$GITHUB_STEP_SUMMARY\"\n"
+  - name: Link checks result
     shell: bash
+    env:
+      RESULT_URL: ${{ steps.dispatch.outputs.validation_run_url }}
+    run: |
+      printf '### Checks requested\n\n[View checks](%s)\n' "$RESULT_URL" >> "$GITHUB_STEP_SUMMARY"
