@@ -31,7 +31,7 @@ permissions:
 
 jobs:
   request-validation:
-    name: Validate build
+    name: Submit checks request
     runs-on: ${{ vars.BUILD_REQUEST_RUNNER || 'fractalops-ci-native' }}
     defaults:
       run:

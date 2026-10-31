@@ -12,6 +12,25 @@ You do not install BuildKit, kubectl or k3s, choose an executor revision, or sup
 
 A submitted request is not a completed build or deployment. If a result is uncertain, keep the original request; do not submit another one. For help, post the failing GitHub run link at https://langboard.yamon.io/board/6v0q6uY44jn/hmD5UBzCv6O. Never post credentials.
 
+## Follow one build to completion
+
+A successful request job means **submitted**, not tested, published or deployed.
+Use its Job Summary link to follow the retained execution. Do not repeatedly
+submit or create a second builder to make a quiet workflow move.
+
+- **Waiting:** check the same execution with bounded native watch/backoff. A queue
+  or admission wait is not a running solve; a quiet observation is not failure.
+- **Running:** retain the execution identity and wait for its terminal result.
+  Source validation, signed image publication and deployment are separate gates.
+- **Failed or cancelled:** stop waiting for a success artifact from that execution.
+  Read the reported cause and next action; preserve the failed request and evidence.
+- **Complete:** report the actual check result and signed image digest. Claim
+  deployment only after the target environment health and required E2E evidence.
+
+When escalating, the failing source run link is sufficient. The client attaches
+request/phase/executor context; no extra approval or infrastructure evidence form
+is required. An observation timeout must not trigger another build.
+
 ## Availability
 
 The public client is published. Compatible central API deployment and repository onboarding still require verification before activation. Preview and production acceptance are separate from client publication.

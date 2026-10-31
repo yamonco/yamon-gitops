@@ -9,7 +9,7 @@ from pathlib import Path
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from build_request import NoRedirect, required, read_json, report_failure
+from build_request import NoRedirect, required, read_json, report_dispatch, report_failure
 
 
 CONTEXT_FIELDS = {
@@ -207,6 +207,7 @@ def main(context):
     with open(os.environ["GITHUB_OUTPUT"], "a") as output:
         output.write(f"executor_commit={executor_commit}\nrequest_id={request_id}\nrelease_run_url={receipt['workflowRunUrl']}\n")
 
+    report_dispatch(request_id, receipt['workflowRunUrl'])
 
 if __name__ == "__main__":
     context = {"phase": "configuration"}
