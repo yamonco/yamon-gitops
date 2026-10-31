@@ -9,8 +9,9 @@ on:
         default: default
         type: string
       source_pr:
-        description: Explicit positive number of the open same-repository review PR
-        required: true
+        description: Optional open same-repository PR; omitted values discover the exact current branch and commit
+        required: false
+        default: ""
         type: string
     outputs:
       executor_commit:
@@ -26,6 +27,7 @@ on:
 permissions:
   contents: read
   id-token: write
+  pull-requests: read
 
 jobs:
   request-validation:

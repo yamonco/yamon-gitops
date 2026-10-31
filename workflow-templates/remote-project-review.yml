@@ -4,8 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       source_pr:
-        description: Open same-repository PR number for this review branch
-        required: true
+        description: Optional PR number; omitted values discover the current branch and commit
+        required: false
+        default: ""
         type: string
       profile:
         description: Centrally approved validation profile
@@ -16,6 +17,7 @@ on:
 permissions:
   contents: read
   id-token: write
+  pull-requests: read
 
 concurrency:
   group: project-review-${{ github.ref }}-${{ inputs.profile || 'default' }}
