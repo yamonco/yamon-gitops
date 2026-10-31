@@ -27,7 +27,7 @@ jobs:
   request-validation:
     if: startsWith(github.ref, 'refs/heads/')
     name: Validate build
-    uses: yamonco/yamon-gitops/.github/workflows/remote-project-review.yml@5a92ab5ec421db9b55b340f48c104303bbe3e38d
+    uses: yamonco/yamon-gitops/.github/workflows/remote-project-review.yml@a3850ac495dd8d4470ddb745b166ae656c61c5a5
     with:
       profile: ${{ inputs.profile || 'default' }}
       source_pr: ${{ inputs.source_pr }}
