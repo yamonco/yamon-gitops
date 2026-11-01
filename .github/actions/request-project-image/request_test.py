@@ -556,6 +556,43 @@ class RemoteImageContractTest(unittest.TestCase):
         self.assertNotIn('no build requested', self.summary_text)
         self.assertEqual(sum(c.get_method() == 'POST' for c in self.calls), 1)
 
+    def test_fixed_broker_codes_explain_cause_without_remote_text(self):
+        for status, code, cause in (
+            (409, 'source_advanced', 'Source revision or branch protection changed'),
+            (503, 'source_authority_unavailable', 'Source authority verification'),
+            (500, 'broker_internal_error', 'broker failed internally'),
+        ):
+            with self.subTest(code=code):
+                body = json.dumps({'detail': {'code': code, 'message': 'secret-error-body'}}).encode()
+                error = urllib.error.HTTPError('https://build.example', status, 'failure', {}, io.BytesIO(body))
+                self.assertFalse(self.run_workflow(resolution=error))
+                self.assertIn(cause, self.summary_text)
+                self.assertNotIn('Approval or build profile policy', self.summary_text)
+                self.assertEqual(sum(c.get_method() == 'POST' for c in self.calls), 0)
+
+    def test_unrecognized_or_status_mismatched_broker_codes_keep_generic_guidance(self):
+        for body in (
+            b'{"detail":{"code":"broker_internal_error","message":"secret-error-body"}}',
+            b'{"detail":{"code":["source_advanced"]}}',
+            b'{"detail":{"code":"source_advanced::warning::injected"}}',
+            b'not-json secret-error-body',
+            b'x' * 16385,
+        ):
+            with self.subTest(body=body[:64]):
+                error = urllib.error.HTTPError('https://build.example', 409, 'failure', {}, io.BytesIO(body))
+                self.assertFalse(self.run_workflow(resolution=error))
+                self.assertIn('Approval or build profile policy', self.summary_text)
+                self.assertNotIn('BuildPlane broker failed internally', self.summary_text)
+
+    def test_source_advanced_admission_keeps_single_post_and_retained_request(self):
+        body = b'{"detail":{"code":"source_advanced","message":"secret-error-body"}}'
+        error = urllib.error.HTTPError('https://build.example', 409, 'failure', {}, io.BytesIO(body))
+        self.assertFalse(self.run_workflow({'value': 'assertion-secret'}, error))
+        self.assertIn('Source revision or branch protection changed', self.summary_text)
+        self.assertIn('Read the same request', self.summary_text)
+        self.assertNotIn('repair approval bindings', self.summary_text)
+        self.assertEqual(sum(c.get_method() == 'POST' for c in self.calls), 1)
+
     def test_summary_write_failure_preserves_original_failure(self):
         self.env['GITHUB_STEP_SUMMARY'] = str(self.root / 'missing' / 'summary')
         self.assertFalse(self.run_workflow({'value': 'assertion-secret'}, http_error(412)))
