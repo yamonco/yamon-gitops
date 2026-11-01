@@ -9,7 +9,7 @@ from pathlib import Path
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from build_request import NoRedirect, required, read_json, report_dispatch, report_failure
+from build_request import NoRedirect, required, read_json, broker_error_code, report_dispatch, report_failure
 
 
 def current_pull_request(opener, repository, source_ref, revision):
@@ -93,6 +93,7 @@ def main(context):
     def fresh_assertion(read=False, deadline=None):
         try:
             context["http"] = None
+            context["broker_code"] = None
             with opener.open(urllib.request.Request(assertion_url, headers={"Authorization": "Bearer " + token}), timeout=remaining_timeout(deadline)) as response:
                 identity = read_json(response)
             remaining_timeout(deadline)
@@ -122,6 +123,7 @@ def main(context):
     )
     context["phase"] = "resolution"
     context["http"] = None
+    context["broker_code"] = None
     try:
         with opener.open(resolution_request, timeout=30) as response:
             resolution = read_json(response)
@@ -140,6 +142,7 @@ def main(context):
         context["http"] = error.code if isinstance(error, urllib.error.HTTPError) else None
         context["invalid_resolution"] = isinstance(error, ValueError)
         if isinstance(error, urllib.error.HTTPError):
+            context["broker_code"] = broker_error_code(error)
             error.close()
         raise SystemExit("Executor resolution unavailable or invalid; no build requested") from None
 
@@ -148,6 +151,7 @@ def main(context):
     def fetch(read=False, deadline=None):
         context["phase"] = "receipt" if read else "admission"
         context["http"] = None
+        context["broker_code"] = None
         if read:
             headers["Authorization"] = "Bearer " + fresh_assertion(read=True, deadline=deadline)
         request = urllib.request.Request(
@@ -167,6 +171,7 @@ def main(context):
                 return result
         except urllib.error.HTTPError as error:
             context["http"] = error.code
+            context["broker_code"] = broker_error_code(error)
             if not read:
                 context["admission_http"] = error.code
             error.close()

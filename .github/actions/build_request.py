@@ -25,6 +25,21 @@ def read_json(response):
     return json.loads(raw)
 
 
+def broker_error_code(error):
+    """Accept only fixed broker codes paired with their HTTP status; discard all text."""
+    try:
+        body = read_json(error)
+        detail = body.get("detail") if isinstance(body, dict) else None
+        code = detail.get("code") if isinstance(detail, dict) else None
+        return code if isinstance(code, str) and {
+            "source_advanced": 409,
+            "source_authority_unavailable": 503,
+            "broker_internal_error": 500,
+        }.get(code) == error.code else None
+    except (OSError, ValueError, AttributeError):
+        return None
+
+
 def report_dispatch(request_id, run_url):
     """A dispatch receipt proves submission, never build or deployment completion."""
     message = (
@@ -49,7 +64,20 @@ def report_failure(reason, context, *, context_fields, request_suffix):
     phase = context.get("phase")
     phase = phase if phase in ("configuration", "identity", "resolution", "admission", "receipt", "output") else "configuration"
     redirected = code in (301, 302, 303, 307, 308)
-    if redirected:
+    broker_code = context.get("broker_code")
+    if broker_code == "source_advanced" and code == 409:
+        cause = "Source revision or branch protection changed."
+        owner = "Product owner: reconcile the retained request before starting a new authorized source run."
+        action = "Read the same request for its outcome. Do not change credentials, profiles or executor pins; do not resubmit while the outcome is unknown."
+    elif broker_code == "source_authority_unavailable" and code == 503:
+        cause = "Source authority verification is temporarily unavailable."
+        owner = "Central BuildPlane owner: recover source authority access."
+        action = "Read the same retained request after recovery; do not resubmit."
+    elif broker_code == "broker_internal_error" and code == 500:
+        cause = "BuildPlane broker failed internally."
+        owner = "Central BuildPlane owner: inspect broker diagnostics using the attached request ID."
+        action = "Read the same retained request for its outcome; do not resubmit or change product configuration."
+    elif redirected:
         cause = "Incorrect browser-SSO routing: the machine API returned a redirect."
         owner = "Central BuildPlane owner: restore the API route for Actions OIDC without browser sign-in."
         action = "Inspect the linked source run and shared guide for API route recovery; keep NoRedirect and Actions OIDC, without adding credentials or runners."

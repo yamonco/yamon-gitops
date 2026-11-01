@@ -51,7 +51,7 @@ The central executor remains `yamonco/fractalops`. Repository publication does n
 
 ## Checks and support
 
-`python3 -B .github/actions/request-project-image/request_test.py` and the equivalent review command exercise 79 transport/identity/error-boundary tests. `python3 -B check_contract.py` checks immutable public references and native request-job boundaries. Repository CI performs only these short client checks; actual product builds use the central BuildPlane.
+`python3 -B .github/actions/request-project-image/request_test.py` and the equivalent review command exercise 90 transport/identity/error-boundary tests. `python3 -B check_contract.py` checks immutable public references and native request-job boundaries. Repository CI performs only these short client checks; actual product builds use the central BuildPlane.
 
 Failure annotations and Job Summary show cause, next action, responsible owner and retained execution context. Central authentication/admission/executor failures do not require developers to patch infrastructure. Do not resubmit an uncertain accepted request or share tokens, secrets or OIDC assertions.
 
