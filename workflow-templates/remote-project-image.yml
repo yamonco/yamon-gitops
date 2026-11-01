@@ -17,6 +17,6 @@ concurrency:
 jobs:
   request-image:
     name: Build image
-    uses: yamonco/yamon-gitops/.github/workflows/remote-project-image.yml@54c4688993789357ded13720fae319da8595f3b5
+    uses: yamonco/yamon-gitops/.github/workflows/remote-project-image.yml@57ab34c3c62b6a67e88447dac89183dceb61c9a4
     with:
       profile: default
