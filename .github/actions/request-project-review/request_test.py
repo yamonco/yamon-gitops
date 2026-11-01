@@ -113,6 +113,11 @@ class RemoteReviewContractTest(unittest.TestCase):
         for secret in ('identity-secret', 'assertion-secret', 'secret-error-body'):
             self.assertNotIn(secret, log.getvalue() + self.summary_text)
         self.assertLessEqual(sum(c.get_method() == 'POST' for c in self.calls), 1)
+        if success:
+            self.assertIn('Request submitted; build result and deployment are unverified.', self.log)
+            self.assertIn('### Build request submitted', self.summary_text)
+            self.assertIn('Follow this execution', self.summary_text)
+            self.assertIn('do not submit another build', self.summary_text)
         if not success:
             self.assertFalse(self.output.exists())
             self.assertIn('::error title=Company BuildPlane request failed::', self.log)

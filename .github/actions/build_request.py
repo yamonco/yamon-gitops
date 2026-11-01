@@ -25,6 +25,23 @@ def read_json(response):
     return json.loads(raw)
 
 
+def report_dispatch(request_id, run_url):
+    """A dispatch receipt proves submission, never build or deployment completion."""
+    message = (
+        "Request submitted; build result and deployment are unverified. "
+        "Follow the retained execution and wait for its terminal result; "
+        "do not submit another build while its outcome is unknown."
+    )
+    print("::notice title=Build request submitted::" + message + " Execution: " + run_url)
+    summary = os.environ.get("GITHUB_STEP_SUMMARY")
+    if summary:
+        with open(summary, "a") as output:
+            output.write(
+                "### Build request submitted\n\n" + message + "\n\n"
+                + f"Request: `{request_id}`\n\n[Follow this execution]({run_url})\n"
+            )
+
+
 def report_failure(reason, context, *, context_fields, request_suffix):
     """Render only fixed guidance and allowlisted context, never remote error text."""
     code = context.get("http")
