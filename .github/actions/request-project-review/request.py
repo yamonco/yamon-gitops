@@ -9,7 +9,7 @@ from pathlib import Path
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from build_request import NoRedirect, required, read_json, broker_error_code, report_dispatch, report_failure
+from build_request import NoRedirect, required, read_json, fetch_actions_assertion, broker_error_code, report_dispatch, report_failure
 
 
 def current_pull_request(opener, repository, source_ref, revision):
@@ -92,18 +92,10 @@ def main(context):
 
     def fresh_assertion(read=False, deadline=None):
         try:
-            context["http"] = None
-            context["broker_code"] = None
-            with opener.open(urllib.request.Request(assertion_url, headers={"Authorization": "Bearer " + token}), timeout=remaining_timeout(deadline)) as response:
-                identity = read_json(response)
+            assertion = fetch_actions_assertion(opener, assertion_url, token, context, timeout=remaining_timeout(deadline), deadline=deadline)
             remaining_timeout(deadline)
-            assertion = identity.get("value") if isinstance(identity, dict) else None
-            if not isinstance(assertion, str) or not assertion or len(assertion) > 16384:
-                raise ValueError("Invalid identity response")
-        except (urllib.error.URLError, OSError, ValueError) as error:
-            context["http"] = error.code if isinstance(error, urllib.error.HTTPError) else None
-            if isinstance(error, urllib.error.HTTPError):
-                error.close()
+        except (urllib.error.URLError, OSError, ValueError):
+            remaining_timeout(deadline)
             raise SystemExit(f"Actions identity unavailable; inspect request {request_id} before any new request" if read else "Actions identity unavailable; no build requested") from None
         return assertion
 

@@ -4,6 +4,7 @@ import contextlib
 import io
 import json
 import os
+import sys
 from pathlib import Path
 import tempfile
 import unittest
@@ -13,9 +14,14 @@ import urllib.parse
 import urllib.request
 
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from issuer_test import IssuerContract
+
+
 WORKFLOW = Path(__file__).resolve().parents[2] / 'workflows/remote-project-review.yml'
 ACTION = WORKFLOW.parents[1] / 'actions/request-project-review/action.yml'
 SCRIPT = (ACTION.parent / 'request.py').read_text()
+
 
 RECEIPT = {
     'schemaVersion': 1, 'requestId': '123-456-1', 'status': 'dispatched',
@@ -28,7 +34,7 @@ def http_error(code):
     return urllib.error.HTTPError('https://broker.example', code, 'secret-error-body', {}, io.BytesIO())
 
 
-class RemoteReviewContractTest(unittest.TestCase):
+class RemoteReviewContractTest(IssuerContract, unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
@@ -51,7 +57,7 @@ class RemoteReviewContractTest(unittest.TestCase):
         self.calls = []
         self.sleeps = []
 
-    def run_workflow(self, *responses, elapsed=None, resolution=None, resolution_headers=None, refresh_error=None, discovery=None):
+    def run_workflow(self, *responses, elapsed=None, resolution=None, resolution_headers=None, refresh_error=None, discovery=None, identity_responses=None):
         for response in (*responses, resolution):
             if isinstance(response, urllib.error.HTTPError):
                 self.addCleanup(response.close)
@@ -60,7 +66,8 @@ class RemoteReviewContractTest(unittest.TestCase):
         self.output.unlink(missing_ok=True)
         self.summary.unlink(missing_ok=True)
         self.sleeps = []
-        replies = iter(responses or ({'value': 'assertion-secret'}, RECEIPT))
+        replies = iter(responses or ((RECEIPT,) if identity_responses is not None else ({'value': 'assertion-secret'}, RECEIPT)))
+        issuer_replies = iter(identity_responses or ())
 
         self.timeouts = []
         durations = iter(elapsed or ())
@@ -88,6 +95,11 @@ class RemoteReviewContractTest(unittest.TestCase):
             self.assertLessEqual(timeout, 30)
             if elapsed is not None:
                 elapsed_clock[0] += next(durations, 0)
+            if request.full_url.startswith('https://actions.example/') and identity_responses is not None:
+                reply = next(issuer_replies)
+                if isinstance(reply, Exception):
+                    raise reply
+                return io.BytesIO(reply if isinstance(reply, bytes) else json.dumps(reply).encode())
             if request.full_url.startswith('https://actions.example/') and len(self.calls) > 1:
                 if refresh_error is not None:
                     raise refresh_error
@@ -229,7 +241,7 @@ class RemoteReviewContractTest(unittest.TestCase):
                     self.assertEqual(self.calls, [])
 
     def test_identity_failure_never_submits(self):
-        for response in [{}, [], {'value': ''}, {'value': 123}, b'invalid', b'x' * 16385, http_error(403), TimeoutError('secret-error-body')]:
+        for response in [{}, [], {'value': ''}, {'value': 123}, b'invalid', b'x' * 16385, http_error(403)]:
             with self.subTest(response_type=type(response).__name__):
                 self.assertFalse(self.run_workflow(response))
                 self.assertEqual(len(self.calls), 1)
@@ -257,7 +269,8 @@ class RemoteReviewContractTest(unittest.TestCase):
 
     def test_poll_deadline_stops_before_next_read(self):
         pending = {**RECEIPT, 'workflowRunId': None, 'workflowRunUrl': None}
-        with patch('time.monotonic', side_effect=[0, 91]):
+        poll_times = iter((0, 91))
+        with patch('time.monotonic', side_effect=lambda: 0 if len(self.calls) < 2 else next(poll_times)):
             self.assertFalse(self.run_workflow({'value': 'assertion-secret'}, pending))
         self.assertEqual(len(self.calls), 2)
         self.assertEqual(self.sleeps, [])
@@ -277,8 +290,8 @@ class RemoteReviewContractTest(unittest.TestCase):
     def test_assertion_and_receipt_timeouts_use_remaining_budget(self):
         pending = {**RECEIPT, 'workflowRunId': None, 'workflowRunUrl': None}
         self.assertTrue(self.run_workflow({'value': 'assertion-secret'}, pending,
-                                          pending, RECEIPT, elapsed=[0, 0, 80, 0, 0, 0]))
-        self.assertEqual(self.timeouts[:4], [30, 30, 30, 10])
+                                          pending, RECEIPT, elapsed=[0, 0, 0, 80, 0, 0]))
+        self.assertEqual(self.timeouts[:4], [30, 30, 30, 30])
         self.assertEqual(self.timeouts[4:], [10, 10])
 
     def test_identity_is_renewed_before_each_retained_receipt_read(self):

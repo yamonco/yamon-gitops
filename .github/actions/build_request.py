@@ -1,8 +1,13 @@
 """Shared build-request validation and safe failure reporting; no network work on import."""
 
+import errno
 import json
 import os
 import re
+import socket
+import ssl
+import time
+import urllib.error
 import urllib.request
 
 
@@ -23,6 +28,68 @@ def read_json(response):
     if len(raw) > 16384:
         raise ValueError("Response too large")
     return json.loads(raw)
+
+
+IDENTITY_ERRORS = frozenset({
+    "http", "timeout", "connection_reset", "tls", "dns", "os_error", "url_error", "invalid_response",
+})
+
+
+def fetch_actions_assertion(opener, url, token, context, *, timeout, deadline=None):
+    """Retry only transient issuer GETs once, within the caller's existing budget."""
+    acquisition_deadline = time.monotonic() + timeout
+    deadline = min(acquisition_deadline, deadline) if deadline is not None else acquisition_deadline
+    context["http"] = None
+    context["broker_code"] = None
+    context.pop("identity_error", None)
+    context.pop("identity_errno", None)
+    for attempt in range(2):
+        try:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError
+            with opener.open(urllib.request.Request(url, headers={"Authorization": "Bearer " + token}), timeout=remaining) as response:
+                identity = read_json(response)
+            if time.monotonic() >= deadline:
+                raise TimeoutError
+            assertion = identity.get("value") if isinstance(identity, dict) else None
+            if not isinstance(assertion, str) or not assertion or len(assertion) > 16384:
+                raise ValueError
+            context["http"] = None
+            context.pop("identity_error", None)
+            context.pop("identity_errno", None)
+            return assertion
+        except (urllib.error.URLError, OSError, ValueError) as error:
+            # No exception text, URL, headers, response body or arbitrary class names.
+            reason = error.reason if isinstance(error, urllib.error.URLError) else error
+            code = error.code if isinstance(error, urllib.error.HTTPError) else None
+            code = code if type(code) is int and 100 <= code <= 599 else None
+            number = reason.errno if isinstance(reason, OSError) else None
+            number = number if type(number) is int and -65535 <= number <= 65535 else None
+            if isinstance(error, urllib.error.HTTPError):
+                category = "http"
+                number = None
+                error.close()
+            elif isinstance(reason, ssl.SSLError):
+                category = "tls"
+            elif isinstance(reason, socket.gaierror):
+                category = "dns"
+            elif isinstance(reason, TimeoutError) or number == errno.ETIMEDOUT:
+                category = "timeout"
+            elif isinstance(reason, ConnectionResetError) or number == errno.ECONNRESET:
+                category = "connection_reset"
+            elif isinstance(error, ValueError):
+                category = "invalid_response"
+            else:
+                category = "os_error" if isinstance(reason, OSError) else "url_error"
+            context["http"] = code
+            context["identity_error"] = category
+            context["identity_errno"] = number
+            transient = category in ("timeout", "connection_reset") or code in (429, 500, 502, 503, 504)
+            if attempt == 0 and transient and deadline - time.monotonic() > 1:
+                time.sleep(1)
+                continue
+            raise
 
 
 def broker_error_code(error):
@@ -65,7 +132,19 @@ def report_failure(reason, context, *, context_fields, request_suffix):
     phase = phase if phase in ("configuration", "identity", "resolution", "admission", "receipt", "output") else "configuration"
     redirected = code in (301, 302, 303, 307, 308)
     broker_code = context.get("broker_code")
-    if broker_code == "source_advanced" and code == 409:
+    identity_error = context.get("identity_error")
+    identity_error = identity_error if type(identity_error) is str and identity_error in IDENTITY_ERRORS else None
+    identity_errno = context.get("identity_errno")
+    identity_errno = identity_errno if type(identity_errno) is int and -65535 <= identity_errno <= 65535 else None
+    if identity_error and code not in (401, 403):
+        cause = ("Actions OIDC issuer response is invalid." if identity_error == "invalid_response" else
+                 "Actions OIDC issuer HTTP request failed." if identity_error == "http" else
+                 "Actions OIDC issuer transport failed.")
+        owner = "Central BuildPlane owner: recover the native runner's GitHub Actions identity acquisition."
+        action = "Inspect the safe issuer category and numeric code; do not add product credentials or widen permissions."
+        if not context.get("submitted"):
+            action = "No build requested. " + action
+    elif broker_code == "source_advanced" and code == 409:
         cause = "Source revision or branch protection changed."
         owner = "Product owner: reconcile the retained request before starting a new authorized source run."
         action = "Read the same request for its outcome. Do not change credentials, profiles or executor pins; do not resubmit while the outcome is unknown."
@@ -93,8 +172,7 @@ def report_failure(reason, context, *, context_fields, request_suffix):
         cause = "Request service unavailable."
         owner = "Central BuildPlane owner: verify the shared endpoint and service availability for the reported phase."
         action = "Inspect the linked source run and shared guide for service recovery."
-    elif (code in (401, 403) or "Actions identity unavailable" in reason
-        or "Actions identity credential unavailable" in reason):
+    elif code in (401, 403) or "Actions identity credential unavailable" in reason:
         cause = "Authentication or authorization failed."
         owner = "Central BuildPlane owner: restore Actions OIDC trust and broker access."
         action = "No developer configuration change required. Central BuildPlane must restore authentication; do not add product credentials."
@@ -127,7 +205,7 @@ def report_failure(reason, context, *, context_fields, request_suffix):
         action = ("Central BuildPlane must correct the shared action output configuration; retain the confirmed build and do not submit again."
                   if phase == "output" else "Correct the invalid workflow input identified in the error above, then rerun. Source/profile/channel/PR are product inputs; shared endpoint and OIDC configuration belong to central BuildPlane.")
 
-    if redirected or code in (400, 422, 429, 502, 503, 504):
+    if not identity_error and (redirected or code in (400, 422, 429, 502, 503, 504)):
         if context.get("submitted"):
             action += " Submission outcome is unconfirmed. Keep this request; do not rerun or submit another build. Status polling reads the same retained request and does not submit a build."
         else:
@@ -160,6 +238,9 @@ def report_failure(reason, context, *, context_fields, request_suffix):
                f"HTTP status: {code if type(code) is int else 'unavailable'}",
                f"Admission HTTP status: {admission_http}",
                f"Frozen executor: {executor}"]
+    if identity_error:
+        details.extend([f"Issuer category: {identity_error}",
+                        f"Issuer errno: {identity_errno if identity_errno is not None else 'unavailable'}"])
     details.extend(f"{name}: {value}" for name, value in fields.items() if name != "REQUEST_ID")
     # Escape workflow command data even though context is restricted to safe characters.
     annotation = " | ".join(details[:2] + details[4:] + ["Full context: Job Summary."]).replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
