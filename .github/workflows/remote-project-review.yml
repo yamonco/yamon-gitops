@@ -44,7 +44,7 @@ jobs:
     steps:
       - name: Submit build request
         id: dispatch
-        uses: yamonco/yamon-gitops/.github/actions/request-project-review@972b5aa33ca45482e022bef38c5ba49c15f28745
+        uses: yamonco/yamon-gitops/.github/actions/request-project-review@9d62afac9a8919f89f69297a6f42d5f1423cd41b
         with:
           profile: ${{ inputs.profile }}
           broker-url: ${{ vars.IMAGE_BUILD_BROKER_URL }}
