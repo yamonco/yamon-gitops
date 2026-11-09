@@ -182,12 +182,46 @@ class RemoteReviewContractTest(IssuerContract, unittest.TestCase):
                            'refs/heads/review/a//b', 'refs/heads/review/a.lock'],
             'SOURCE_COMMIT': ['main', ''], 'REQUEST_ID': ['123-456-0'],
             'PROFILE': ['', 'bad profile', '../default'],
-            'GITHUB_EVENT_NAME': ['pull_request', 'pull_request_target', 'workflow_run'],
+            'GITHUB_EVENT_NAME': ['pull_request_target', 'workflow_run'],
         }.items():
             for value in values:
                 with self.subTest(name=name, value=value), patch.dict(self.env, {name: value}):
                     self.assertFalse(self.run_workflow())
                     self.assertEqual(self.calls, [])
+
+    def test_native_pull_request_uses_head_and_rejects_untrusted_event_before_network(self):
+        event = {'number': 12, 'repository': {'full_name': 'yamonco/example'},
+                 'pull_request': {'number': 12, 'state': 'open', 'draft': False,
+                     'head': {'sha': 'c' * 40, 'ref': 'review/example', 'repo': {'full_name': 'yamonco/example'}},
+                     'base': {'ref': 'main', 'repo': {'full_name': 'yamonco/example'}}}}
+        self.env.update(GITHUB_EVENT_NAME='pull_request', SOURCE_REF='refs/pull/12/merge',
+                        GITHUB_REF='refs/pull/12/merge', GITHUB_SHA='a' * 40,
+                        GITHUB_HEAD_REF='review/example', GITHUB_BASE_REF='main')
+        self.event.write_text(json.dumps(event))
+        self.assertTrue(self.run_workflow())
+        payload = json.loads(self.calls[-1].data)
+        self.assertEqual((payload['sourcePr'], payload['sourceCommit'], payload['sourceRef']),
+                         (12, 'c' * 40, 'refs/heads/review/example'))
+        self.assertFalse(self.run_workflow({'value': 'assertion-secret'}, http_error(409)))
+        self.assertIn('SOURCE_COMMIT: ' + 'c' * 40, self.summary_text)
+        self.assertIn('SOURCE_REF: refs/heads/review/example', self.summary_text)
+        import copy
+        for case in ('draft', 'fork', 'base-fork', 'number', 'head', 'ref', 'merge-sha', 'merge-ref'):
+            with self.subTest(case=case):
+                bad = copy.deepcopy(event)
+                env = self.env.copy()
+                if case == 'draft': bad['pull_request']['draft'] = True
+                if case == 'fork': bad['pull_request']['head']['repo']['full_name'] = 'other/example'
+                if case == 'base-fork': bad['pull_request']['base']['repo']['full_name'] = 'other/example'
+                if case == 'number': bad['number'] = 13
+                if case == 'head': bad['pull_request']['head']['sha'] = 'bad'
+                if case == 'ref': bad['pull_request']['head']['ref'] = 'other'
+                if case == 'merge-sha': env['GITHUB_SHA'] = 'd' * 40
+                if case == 'merge-ref': env['GITHUB_REF'] = 'refs/pull/13/merge'
+                self.event.write_text(json.dumps(bad))
+                with patch.dict(self.env, env, clear=True):
+                    self.assertFalse(self.run_workflow())
+                    self.assertEqual(self.transport_calls, [])
 
     def test_push_preserves_exact_source_and_review_identity(self):
         self.env.update({
