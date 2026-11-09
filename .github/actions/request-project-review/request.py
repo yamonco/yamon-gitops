@@ -48,7 +48,7 @@ CONTEXT_FIELDS = {
     "PROFILE": r"[a-z0-9]([a-z0-9-]{0,46}[a-z0-9])?",
     "REQUEST_ID": r"[1-9][0-9]*-[1-9][0-9]*-[1-9][0-9]*",
     "SOURCE_REF": r"refs/heads/[A-Za-z0-9][A-Za-z0-9._/-]*",
-    "GITHUB_EVENT_NAME": r"push|workflow_dispatch",
+    "GITHUB_EVENT_NAME": r"push|workflow_dispatch|pull_request",
     "SOURCE_PR": r"[1-9][0-9]*",
 }
 REQUEST_SUFFIX = ''
@@ -59,10 +59,38 @@ def main(context):
     commit = required("SOURCE_COMMIT", r"[0-9a-f]{40}")
     profile = required("PROFILE", r"[a-z0-9]([a-z0-9-]{0,46}[a-z0-9])?")
     request_id = required("REQUEST_ID", r"[1-9][0-9]*-[1-9][0-9]*-[1-9][0-9]*")
-    ref = required("SOURCE_REF", r"refs/heads/[A-Za-z0-9][A-Za-z0-9._/-]*")
-    required("GITHUB_EVENT_NAME", r"push|workflow_dispatch")
+    event_name = required("GITHUB_EVENT_NAME", r"push|workflow_dispatch|pull_request")
+    if event_name == "pull_request":
+        source_pr = int(required("SOURCE_PR", r"[1-9][0-9]*"))
+        try:
+            event = json.loads(Path(os.environ["GITHUB_EVENT_PATH"]).read_text())
+            pr = event["pull_request"]
+            head = pr["head"]
+            if (type(event["number"]) is not int or event["number"] != source_pr
+                or pr["number"] != source_pr or pr["state"] != "open" or pr["draft"] is not False
+                or event["repository"]["full_name"] != repository
+                or head["repo"]["full_name"] != repository
+                or pr["base"]["repo"]["full_name"] != repository
+                or head["ref"] != os.environ["GITHUB_HEAD_REF"]
+                or pr["base"]["ref"] != os.environ["GITHUB_BASE_REF"]
+                or os.environ["SOURCE_REF"] != f"refs/pull/{source_pr}/merge"
+                or os.environ["GITHUB_REF"] != os.environ["SOURCE_REF"]
+                or commit != os.environ["GITHUB_SHA"]):
+                raise ValueError("PR event identity mismatch")
+            commit = head["sha"]
+            ref = "refs/heads/" + head["ref"]
+            if not re.fullmatch(r"[0-9a-f]{40}", commit):
+                raise ValueError("Invalid PR head")
+        except (OSError, ValueError, KeyError, TypeError):
+            raise SystemExit("Invalid native pull request identity; no build requested") from None
+    else:
+        ref = required("SOURCE_REF", r"refs/heads/[A-Za-z0-9][A-Za-z0-9._/-]*")
+    if not re.fullmatch(r"refs/heads/[A-Za-z0-9][A-Za-z0-9._/-]*", ref):
+        raise SystemExit("Invalid source ref")
     if ".." in ref or "//" in ref or ref.endswith(("/", ".", ".lock")) or "@{" in ref:
         raise SystemExit("Invalid source ref")
+    if event_name == "pull_request":
+        os.environ.update(SOURCE_COMMIT=commit, SOURCE_REF=ref)
     base = required("IMAGE_BUILD_BROKER_URL", r"https://[^\s]+")
     parsed = urllib.parse.urlsplit(base)
     if not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment:
