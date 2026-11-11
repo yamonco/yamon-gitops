@@ -9,9 +9,14 @@ on:
         default: default
         type: string
       source_channel:
-        description: Default history or explicitly approved protected canary source
+        description: Default history, approved protected canary or trusted PR preview source
         required: false
         default: default
+        type: string
+      source_pr:
+        description: Current PR number when source_channel is preview
+        required: false
+        default: ""
         type: string
     outputs:
       executor_commit:
@@ -27,6 +32,7 @@ on:
 permissions:
   contents: read
   id-token: write
+  pull-requests: read
 
 jobs:
   request-release:
@@ -43,8 +49,9 @@ jobs:
     steps:
       - name: Submit build request
         id: dispatch
-        uses: yamonco/yamon-gitops/.github/actions/request-project-image@9d62afac9a8919f89f69297a6f42d5f1423cd41b
+        uses: yamonco/yamon-gitops/.github/actions/request-project-image@d79b46f1d3f5b08ddac051f0bee803afe4f9b6cb
         with:
           profile: ${{ inputs.profile }}
           broker-url: ${{ vars.IMAGE_BUILD_BROKER_URL }}
           source_channel: ${{ inputs.source_channel }}
+          source_pr: ${{ inputs.source_pr }}
