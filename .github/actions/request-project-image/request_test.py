@@ -57,7 +57,7 @@ class RemoteImageContractTest(IssuerContract, unittest.TestCase):
         self.calls = []
         self.sleeps = []
 
-    def run_workflow(self, *responses, elapsed=None, resolution=None, resolution_headers=None, identity_responses=None):
+    def run_workflow(self, *responses, elapsed=None, resolution=None, resolution_headers=None, identity_responses=None, preview=None):
         for response in (*responses, resolution):
             if isinstance(response, urllib.error.HTTPError):
                 self.addCleanup(response.close)
@@ -75,6 +75,10 @@ class RemoteImageContractTest(IssuerContract, unittest.TestCase):
         durations = iter(elapsed or ())
         def open_request(request, timeout):
             self.transport_calls.append(request)
+            if request.full_url.startswith('https://api.github.com/repos/'):
+                if isinstance(preview, Exception):
+                    raise preview
+                return io.BytesIO(preview if isinstance(preview, bytes) else json.dumps(preview).encode())
             # Keep existing admission/reconciliation assertions separate from resolution.
             if request.full_url.endswith('/resolve'):
                 reply = resolution if resolution is not None else {
@@ -118,7 +122,7 @@ class RemoteImageContractTest(IssuerContract, unittest.TestCase):
                 success = True
         self.log = log.getvalue()
         self.summary_text = self.summary.read_text() if self.summary.exists() else ''
-        for secret in ('identity-secret', 'assertion-secret', 'secret-error-body'):
+        for secret in ('identity-secret', 'assertion-secret', 'secret-error-body', 'preview-read-secret'):
             self.assertNotIn(secret, log.getvalue() + self.summary_text)
         self.assertLessEqual(sum(c.get_method() == 'POST' for c in self.calls), 1)
         if success:
@@ -135,6 +139,72 @@ class RemoteImageContractTest(IssuerContract, unittest.TestCase):
                 self.assertIn('Responsibility:', self.summary_text)
                 self.assertIn('https://langboard.yamon.io/board/6v0q6uY44jn/hmD5UBzCv6O', self.summary_text)
         return success
+
+    def preview(self):
+        self.env.update(SOURCE_CHANNEL='preview', SOURCE_PR='7', GITHUB_EVENT_NAME='workflow_dispatch',
+                        GITHUB_TOKEN='preview-read-secret')
+        return {'number': 7, 'state': 'open', 'merged': False,
+                'base': {'repo': {'full_name': 'yamonco/example'}, 'ref': 'main'},
+                'head': {'repo': {'id': 123}, 'sha': 'c' * 40}}
+
+    def test_preview_resolves_live_head_without_changing_trusted_issuer(self):
+        for event in ('workflow_dispatch', 'pull_request_target'):
+            with self.subTest(event=event):
+                pull = self.preview()
+                self.env.update(GITHUB_EVENT_NAME=event)
+                self.assertTrue(self.run_workflow(preview=pull))
+                payload = json.loads(self.calls[1].data)
+                self.assertEqual(payload, {
+                    'schemaVersion': 4, 'sourceRepository': 'yamonco/example', 'sourceCommit': 'c' * 40,
+                    'sourceRef': 'refs/pull/7/head', 'sourcePr': 7, 'sourceChannel': 'preview',
+                    'profile': 'default', 'requestId': '123-456-1-default',
+                })
+                lookup = self.transport_calls[0]
+                self.assertEqual(lookup.full_url, 'https://api.github.com/repos/yamonco/example/pulls/7')
+                self.assertEqual(lookup.get_header('Authorization'), 'Bearer preview-read-secret')
+                self.assertEqual(json.loads(self.transport_calls[2].data), payload)
+                self.assertEqual(self.env['GITHUB_REF'], 'refs/heads/main')
+
+    def test_preview_rejects_stale_or_malformed_pr_before_oidc_and_admission(self):
+        for field, value in [('state', 'closed'), ('merged', True), ('number', 8),
+                             ('head', {'repo': {'id': 123}, 'sha': 'invalid'}),
+                             ('base', {'repo': {'full_name': 'other/repo'}, 'ref': 'main'})]:
+            with self.subTest(field=field):
+                pull = self.preview()
+                pull[field] = value
+                self.assertFalse(self.run_workflow(preview=pull))
+                self.assertEqual(self.calls, [])
+                self.assertEqual(len(self.transport_calls), 1)
+
+    def test_preview_requires_trusted_branch_event_pr_and_read_credential(self):
+        for changes in ({'GITHUB_REF': 'refs/heads/feature'}, {'GITHUB_EVENT_NAME': 'push'},
+                        {'SOURCE_PR': ''}, {'GITHUB_TOKEN': ''}):
+            with self.subTest(changes=changes):
+                pull = self.preview()
+                self.env['GITHUB_REF'] = 'refs/heads/main'
+                self.env.update(changes)
+                self.assertFalse(self.run_workflow(preview=pull))
+                self.assertEqual(self.transport_calls, [])
+
+    def test_default_channel_does_not_treat_pr_input_as_preview_authority(self):
+        self.env['SOURCE_PR'] = '7'
+        self.assertTrue(self.run_workflow())
+        self.assertEqual(json.loads(self.calls[1].data)['schemaVersion'], 3)
+        self.assertNotIn('sourcePr', json.loads(self.calls[1].data))
+
+    def test_preview_lookup_failure_or_oversize_never_submits(self):
+        for reply in (http_error(404), b'x' * 1048577, b'null'):
+            with self.subTest(reply_type=type(reply).__name__):
+                self.preview()
+                self.assertFalse(self.run_workflow(preview=reply))
+                self.assertEqual(self.calls, [])
+
+    def test_preview_keeps_external_head_approval_at_the_broker(self):
+        pull = self.preview()
+        pull['head']['repo'] = {'id': 987, 'full_name': 'contributor/fork'}
+        self.assertTrue(self.run_workflow(preview=pull))
+        self.assertEqual(json.loads(self.calls[1].data)['sourceRepository'], 'yamonco/example')
+        self.assertNotIn('approval', json.loads(self.calls[1].data))
 
     def test_default_and_canary_success_exact_payload_and_outputs(self):
         for channel, ref in [('default', 'refs/heads/main'), ('canary', 'refs/heads/deploy/canary')]:
