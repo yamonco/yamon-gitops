@@ -5,10 +5,17 @@ on:
     branches:
       - $default-branch
   workflow_dispatch:
+    inputs:
+      source_pr:
+        description: Optional PR number to build a preview from the trusted default-branch workflow
+        required: false
+        default: ""
+        type: string
 
 permissions:
   contents: read
   id-token: write
+  pull-requests: read
 
 concurrency:
   group: project-image-${{ github.ref }}
@@ -17,6 +24,8 @@ concurrency:
 jobs:
   request-image:
     name: Build image
-    uses: yamonco/yamon-gitops/.github/workflows/remote-project-image.yml@04f293ea6675e05dfbad9aff5fe5655bc2266e80
+    uses: yamonco/yamon-gitops/.github/workflows/remote-project-image.yml@4c174914435131d6c27fddea8d4719c09f5402c7
     with:
       profile: default
+      source_channel: ${{ inputs.source_pr && 'preview' || 'default' }}
+      source_pr: ${{ inputs.source_pr }}
