@@ -9,9 +9,13 @@ inputs:
     description: Company approved broker origin
     required: true
   source_channel:
-    description: Approved default or canary channel
+    description: Approved default, protected canary or trusted PR preview channel
     required: false
     default: default
+  source_pr:
+    description: Current PR number for preview; the trusted workflow remains on the default branch
+    required: false
+    default: ""
 outputs:
   executor_commit:
     description: Broker-selected immutable company executor SHA
@@ -33,6 +37,8 @@ runs:
       IMAGE_BUILD_BROKER_URL: ${{ inputs.broker-url }}
       IMAGE_BUILD_OIDC_AUDIENCE: fractalops-project-validation
       SOURCE_CHANNEL: ${{ inputs.source_channel }}
+      SOURCE_PR: ${{ inputs.source_pr }}
+      GITHUB_TOKEN: ${{ github.token }}
       PROFILE: ${{ inputs.profile }}
       REQUEST_ID: ${{ github.repository_id }}-${{ github.run_id }}-${{ github.run_attempt }}
       SOURCE_COMMIT: ${{ github.sha }}

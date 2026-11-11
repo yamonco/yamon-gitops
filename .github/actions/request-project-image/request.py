@@ -18,10 +18,43 @@ CONTEXT_FIELDS = {
     "PROFILE": r"[a-z0-9]([a-z0-9-]{0,46}[a-z0-9])?",
     "REQUEST_ID": r"[1-9][0-9]*-[1-9][0-9]*-[1-9][0-9]*",
     "GITHUB_REF": r"refs/heads/[A-Za-z0-9][A-Za-z0-9._/-]*",
-    "GITHUB_EVENT_NAME": r"push|workflow_dispatch",
-    "SOURCE_CHANNEL": r"default|canary",
+    "GITHUB_EVENT_NAME": r"push|workflow_dispatch|pull_request_target",
+    "SOURCE_CHANNEL": r"default|canary|preview",
+    "SOURCE_PR": r"[1-9][0-9]*",
 }
 REQUEST_SUFFIX = '-'
+
+
+def preview_source(opener, repository, number, default_branch):
+    """Resolve the current PR head; the broker independently checks its authority."""
+    token = os.environ.get("GITHUB_TOKEN", "")
+    if not token:
+        raise SystemExit("Preview pull request credential unavailable; no build requested")
+    request = urllib.request.Request(
+        f"https://api.github.com/repos/{repository}/pulls/{number}",
+        headers={"Authorization": "Bearer " + token, "Accept": "application/vnd.github+json",
+                 "X-GitHub-Api-Version": "2022-11-28"},
+    )
+    try:
+        with opener.open(request, timeout=30) as response:
+            raw = response.read(1048577)
+        if len(raw) > 1048576:
+            raise ValueError("Preview PR response too large")
+        pull = json.loads(raw)
+        if (type(pull["number"]) is not int or pull["number"] != number
+            or pull["state"] != "open" or pull["merged"] is not False
+            or pull["base"]["repo"]["full_name"] != repository
+            or pull["base"]["ref"] != default_branch
+            or type(pull["head"]["repo"]["id"]) is not int
+            or pull["head"]["repo"]["id"] <= 0
+            or not isinstance(pull["head"]["sha"], str)
+            or not re.fullmatch(r"[0-9a-f]{40}", pull["head"]["sha"])):
+            raise ValueError("Preview PR identity mismatch")
+        return pull["head"]["sha"]
+    except (urllib.error.URLError, OSError, ValueError, KeyError, TypeError) as error:
+        if isinstance(error, urllib.error.HTTPError):
+            error.close()
+        raise SystemExit("Current preview PR unavailable; no build requested") from None
 
 
 def main(context):
@@ -30,15 +63,15 @@ def main(context):
     profile = required("PROFILE", r"[a-z0-9]([a-z0-9-]{0,46}[a-z0-9])?")
     request_id = required("REQUEST_ID", r"[1-9][0-9]*-[1-9][0-9]*-[1-9][0-9]*") + "-" + profile
     ref = required("GITHUB_REF", r"refs/heads/[A-Za-z0-9][A-Za-z0-9._/-]*")
-    channel = required("SOURCE_CHANNEL", r"default|canary")
-    required("GITHUB_EVENT_NAME", r"push|workflow_dispatch")
+    channel = required("SOURCE_CHANNEL", r"default|canary|preview")
+    required("GITHUB_EVENT_NAME", r"workflow_dispatch|pull_request_target" if channel == "preview" else r"push|workflow_dispatch")
     if ".." in ref:
         raise SystemExit("Invalid source ref")
     with open(os.environ["GITHUB_EVENT_PATH"]) as event_file:
         default_branch = json.load(event_file).get("repository", {}).get("default_branch")
     if not isinstance(default_branch, str) or not default_branch:
         raise SystemExit("Default branch unavailable")
-    if (channel == "default" and ref != "refs/heads/" + default_branch) or (
+    if (channel in {"default", "preview"} and ref != "refs/heads/" + default_branch) or (
         channel == "canary" and not re.fullmatch(r"refs/heads/deploy/[A-Za-z0-9][A-Za-z0-9._/-]*", ref)
     ):
         raise SystemExit("Source channel does not match ref")
@@ -55,6 +88,12 @@ def main(context):
     if not token:
         raise SystemExit("Actions identity credential unavailable")
     opener = urllib.request.build_opener(NoRedirect())
+    source_pr = None
+    if channel == "preview":
+        source_pr = int(required("SOURCE_PR", r"[1-9][0-9]*"))
+        commit = preview_source(opener, repository, source_pr, default_branch)
+        ref = f"refs/pull/{source_pr}/head"
+        os.environ["SOURCE_COMMIT"] = commit
     query = [(k, v) for k, v in urllib.parse.parse_qsl(oidc.query, keep_blank_values=True) if k != "audience"]
     query.append(("audience", audience))
     assertion_url = urllib.parse.urlunsplit(oidc._replace(query=urllib.parse.urlencode(query)))
@@ -78,9 +117,12 @@ def main(context):
     context["phase"] = "identity"
     assertion = fresh_assertion()
     payload = {
-        "schemaVersion": 3, "sourceRepository": repository, "sourceCommit": commit,
+        "schemaVersion": 4 if source_pr is not None else 3,
+        "sourceRepository": repository, "sourceCommit": commit,
         "sourceRef": ref, "sourceChannel": channel, "profile": profile, "requestId": request_id,
     }
+    if source_pr is not None:
+        payload["sourcePr"] = source_pr
     endpoint = base.rstrip("/") + "/v1/builds/project-images"
     headers = {"Authorization": "Bearer " + assertion, "Content-Type": "application/json", "User-Agent": "Company-RemoteImage/1.0"}
 
