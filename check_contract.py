@@ -25,4 +25,13 @@ for kind in ("image", "review"):
     assert "using: composite" in action and 'python3 "${{ github.action_path }}/request.py"' in action, kind
     assert "SOURCE_REPOSITORY: ${{ github.repository }}" in action, kind
     assert "REQUEST_ID: ${{ github.repository_id }}-${{ github.run_id }}-${{ github.run_attempt }}" in action, kind
-print("PASS: image/review public immutable nested refs, onboarding runner fallback, native request-only wrappers, source identity and permissions")
+quick = (ROOT / ".github/workflows/quick-checks.yml").read_text()
+assert "contents: read" in quick and "id-token:" not in quick
+assert "persist-credentials: false" in quick and "fetch-depth: 0" in quick
+assert "github.event_name != 'pull_request_target'" in quick
+assert "github.event.pull_request.head.repo.full_name == github.repository" in quick
+assert "ref: ${{ github.event.pull_request.head.sha || github.sha }}" in quick
+assert "secrets:" not in quick and "IMAGE_BUILD_BROKER_URL" not in quick
+assert "timeout-minutes: 10" in quick
+assert all(IMMUTABLE_REF.search(ref) for ref in re.findall(r"(?m)^\s*-?\s*uses:\s*(\S+)", quick))
+print("PASS: immutable request refs and quick-check source identity, permissions and fork boundaries")

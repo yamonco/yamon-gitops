@@ -1,0 +1,36 @@
+name: Quick checks
+
+on:
+  workflow_call:
+    inputs:
+      command:
+        description: Project-owned fast lint and test command
+        required: true
+        type: string
+      working-directory:
+        description: Project directory inside the checked-out repository
+        required: false
+        default: .
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    if: >-
+      github.event_name != 'pull_request_target' &&
+      (github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: ${{ vars.BUILD_REQUEST_RUNNER || 'fractalops-ci-native' }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Run project quick checks
+        working-directory: ${{ inputs.working-directory }}
+        shell: bash
+        run: ${{ inputs.command }}

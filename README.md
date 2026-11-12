@@ -39,6 +39,21 @@ The public client is published. Compatible central API deployment and repository
 
 The details below are maintained centrally; developers do not configure them for each build.
 
+### Fast development checks
+
+Use `.github/workflows/quick-checks.yml` at a reviewed immutable commit for dev
+pushes and same-repository PRs. Pass the project's existing fast lint/test command
+and, for a monorepo, its working directory. The project keeps ownership of its
+runtime versions, package manager and lockfile; this workflow does not install a
+second toolchain or replace those declarations.
+
+Quick checks run on the existing company CI runner with a read-only GitHub token
+and no stored checkout credentials. They do not request a BuildPlane executor or
+require a canary registration. Fork PRs and `pull_request_target` are not executed
+on the company runner. Source projects must already have runner-group access.
+Keep image building, image scanning/signing and production promotion on their
+existing release paths. A passing quick check is not release or deployment proof.
+
 ### Connect a repository
 
 The central owner approves each repository/profile and its source workflow, connects the project/repository assets, provides the non-secret `IMAGE_BUILD_BROKER_URL`, and grants the source repository access to its approved request runner. The label defaults to `fractalops-ci-native`; where an organization uses a different registered label, the central owner sets `BUILD_REQUEST_RUNNER` once. Developers do not configure infrastructure or credentials.
