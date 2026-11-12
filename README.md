@@ -44,8 +44,10 @@ The details below are maintained centrally; developers do not configure them for
 Use `.github/workflows/quick-checks.yml` at a reviewed immutable commit for dev
 pushes and same-repository PRs. Pass the project's existing fast lint/test command
 and, for a monorepo, its working directory. The project keeps ownership of its
-runtime versions, package manager and lockfile; this workflow does not install a
-second toolchain or replace those declarations.
+runtime versions, package manager and lockfile. If that directory has a standard
+`.node-version` file, the official Node setup action selects its declared version.
+Other tool setup stays in the project's existing command; no organization-wide
+runtime version is imposed.
 
 Quick checks run on the existing company CI runner with a read-only GitHub token
 and no stored checkout credentials. They do not request a BuildPlane executor or
